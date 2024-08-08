@@ -11,6 +11,9 @@ async function cleanup() {
         if (!core.getBooleanInput(Utils.JOB_SUMMARY_DISABLE)) {
             await Utils.generateWorkflowSummaryMarkdown();
         }
+        await Utils.populateCodeScanningSarif();
+        // Clear files
+        await Utils.clearCommandSummaryDir();
     } catch (error) {
         core.setFailed((<any>error).message);
     } finally {

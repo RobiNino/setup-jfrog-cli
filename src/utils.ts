@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import * as rest from '@octokit/rest';
 import { exec } from '@actions/exec';
 import { HttpClient, HttpClientResponse } from '@actions/http-client';
 import * as toolCache from '@actions/tool-cache';
@@ -35,13 +36,17 @@ export class Utils {
     // The default server id name for separate env config
     public static readonly SETUP_JFROG_CLI_SERVER_ID: string = 'setup-jfrog-cli-server';
     // Directory name which holds markdown files for the Workflow summary
-    private static readonly JOB_SUMMARY_DIR_NAME: string = 'jfrog-command-summary';
+    private static readonly COMMAND_SUMMARY_DIR_NAME: string = 'jfrog-command-summary';
     // Workflow summary section files. Order of sections in this array impacts the order in the final markdown.
     public static JOB_SUMMARY_MARKDOWN_SECTIONS_NAMES: MarkdownSection[] = [
         MarkdownSection.Security,
         MarkdownSection.BuildInfo,
         MarkdownSection.Upload,
     ];
+    // Code scanning sarif subdirectory under the command summary directory.
+    private static readonly CODE_SCANNING_SARIF_FILE_SUBDIRECTORY: string = 'code-scanning';
+    // Code scanning sarif expected file name.
+    private static readonly CODE_SCANNING_SARIF_FILE_NAME: string = 'sarif';
 
     // Inputs
     // Version input
@@ -373,17 +378,15 @@ export class Utils {
             Utils.exportVariableIfNotSet('JFROG_CLI_BUILD_PROJECT', projectKey);
         }
 
-        // Enable Job summaries if needed
-        if (!core.getBooleanInput(Utils.JOB_SUMMARY_DISABLE)) {
-            Utils.enableJobSummaries();
-        }
+        // Enable command summaries to allow generating job summary and code scanning.
+        Utils.enableCommandSummaries();
     }
 
     /**
      * Enabling job summary is done by setting the output dir for the summaries.
      * If the output dir is not set, the CLI won't generate the summary markdown files.
      */
-    private static enableJobSummaries() {
+    private static enableCommandSummaries() {
         let commandSummariesOutputDir: string | undefined = process.env.RUNNER_TEMP;
         if (commandSummariesOutputDir) {
             Utils.exportVariableIfNotSet('JFROG_CLI_COMMAND_SUMMARY_OUTPUT_DIR', commandSummariesOutputDir);
@@ -521,18 +524,72 @@ export class Utils {
             // Write to GitHub's job summary
             core.summary.addRaw(markdownContent, true);
             await core.summary.write({ overwrite: true });
-            // Clear files
-            await this.clearJobSummaryDir();
         } catch (error) {
             core.warning(`Failed to generate Workflow summary: ${error}`);
         }
     }
+
+    public static async populateCodeScanningSarif() {
+        try {
+            // Read all sections and construct the final markdown file
+            const sarifContent: string = await this.readCodeScanningSarif();
+            if (sarifContent.length == 0) {
+                core.debug('No code scanning sarif file was found.');
+                return;
+            }
+            //await this.uploadCodeScanningSarif(sarifContent);
+        } catch (error) {
+            core.warning(`Failed populating code scanning sarif: ${error}`);
+        }
+    }
+
+    /*
+    private static async uploadCodeScanningSarif(sarif: string) {
+        // TODO token?
+
+        const token: string = core.getInput('repo-token');
+        const octokit = rest.getOctokit(token);
+        const { owner, repo } = github.context.repo;
+
+        const response = await octokit.request('POST /repos/{owner}/{repo}/code-scanning/sarifs', {
+            owner,
+            repo,
+            data: sarif,
+            name: 'Code scanning results',
+            commit_sha: github.context.sha,
+            ref: github.context.ref,
+        });
+
+        if (response.status !== 201) {
+            throw new Error(`Failed to upload SARIF file: ${response.statusText}`);
+        }
+
+        core.info('SARIF file uploaded successfully');
+    }
+
+     */
+
 
     /**
      * Each section should prepare a file called markdown.md.
      * This function reads each section file and wraps it with a markdown header
      * @returns <string> the content of the markdown file as string, warped in a collapsable section.
      */
+    private static async readCodeScanningSarif(): Promise<string> {
+        const outputDir: string = Utils.getJobOutputDirectoryPath();
+        const fullPath: string = path.join(outputDir, this.CODE_SCANNING_SARIF_FILE_SUBDIRECTORY, this.CODE_SCANNING_SARIF_FILE_NAME);
+        if (!existsSync(fullPath)) {
+            return '';
+        }
+        let content: string = '';
+        try {
+            content = await fs.readFile(fullPath, 'utf-8');
+        } catch (error) {
+            throw new Error('failed to read section file: ' + fullPath + ' ' + error);
+        }
+        return content;
+    }
+
     private static async readCLIMarkdownSectionsAndWrap(): Promise<string> {
         const outputDir: string = Utils.getJobOutputDirectoryPath();
         let markdownContent: string = '';
@@ -620,12 +677,12 @@ export class Utils {
         if (!outputDir) {
             throw new Error('Jobs home directory is undefined, JFROG_CLI_COMMAND_SUMMARY_OUTPUT_DIR is not set.');
         }
-        return path.join(outputDir, Utils.JOB_SUMMARY_DIR_NAME);
+        return path.join(outputDir, Utils.COMMAND_SUMMARY_DIR_NAME);
     }
 
-    private static async clearJobSummaryDir() {
+    public static async clearCommandSummaryDir() {
         const outputDir: string = Utils.getJobOutputDirectoryPath();
-        core.debug('Removing Workflow summary directory: ' + outputDir);
+        core.debug('Removing command summary directory: ' + outputDir);
         await fs.rm(outputDir, { recursive: true });
     }
 
